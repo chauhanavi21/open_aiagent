@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import ssl
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -43,7 +44,14 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+def tls_context() -> ssl.SSLContext:
+    """Verified TLS context (certificate + hostname checks on) that refuses anything below TLS 1.2."""
+    ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=tls_context()))
 
 
 def send(request: urllib.request.Request, timeout: float, max_bytes: int) -> bytes:
