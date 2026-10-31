@@ -62,6 +62,9 @@ curl -X POST http://127.0.0.1:8765/company -H "Authorization: Bearer $env:AGENTF
 
 ## Security design
 
+See [`SECURITY.md`](SECURITY.md) for the checklist mapping, trade-offs and items that do not apply. CI runs tests, bandit (SAST) and pip-audit on every push and weekly.
+
+
 - Binds to loopback only (config rejects other hosts); bearer-token auth with constant-time compare; 64 KB body cap; generic error messages, details only in structured JSON logs.
 - API keys come from environment variables only and are never written to config or logs.
 - Providers must use HTTPS (plain HTTP only for loopback, e.g. local Ollama). TLS verification stays on; redirects are not followed; timeouts and response-size caps everywhere.
