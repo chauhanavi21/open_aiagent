@@ -1,4 +1,6 @@
 import json
+import logging
+import ssl
 import threading
 import urllib.error
 import urllib.request
@@ -10,7 +12,7 @@ from agentforge.agent import Agent, build_runtime
 from agentforge.brains import Action, BrainError, LocalBrain, OpenAICompatBrain, make_brains
 from agentforge.company import Company, Task
 from agentforge.config import Config
-from agentforge.netutil import NetworkError, assert_public_https, validate_provider_url
+from agentforge.netutil import NetworkError, assert_public_https, tls_context, validate_provider_url
 from agentforge.nlp import TfidfIndex, summarize_text
 from agentforge.server import make_server
 from agentforge.tools import ToolError, safe_eval
@@ -283,3 +285,46 @@ def test_openrouter_is_first_in_auto_chain_and_free_by_default(cfg, monkeypatch)
     names = [b.name for b in make_brains(cfg)]
     assert names[0].startswith("openrouter:") and names[0].endswith(":free")  # free before paid Ollama cloud
     assert names.index("ollama_cloud:gpt-oss:120b") > 0 and names[-1] == "local"
+
+
+# ---- security checklist ------------------------------------------------------
+def test_tls_context_enforces_tls12_and_verification():
+    ctx = tls_context()
+    assert ctx.minimum_version >= ssl.TLSVersion.TLSv1_2
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+
+
+def test_failed_auth_is_logged_and_error_hides_internals(rt, caplog):
+    srv = make_server(rt, "t" * 32)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        with caplog.at_level(logging.WARNING, logger="agentforge.server"):
+            assert _post(port, "/agent", {"goal": "hi"}, "bad-token")[0] == 401
+        events = [r for r in caplog.records if getattr(r, "event", "") == "auth_failure"]
+        assert events and "bad-token" not in caplog.text
+        status, body = _post(port, "/agent", {"goal": "x" * 30_000}, "t" * 32)  # ValueError path
+        assert status == 400 and body == {"error": "invalid request"}
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_secrets_never_reach_logs_or_config(cfg, monkeypatch, caplog):
+    secret = "sk-very-secret-value-123"
+    monkeypatch.setenv("AGENTFORGE_API_KEY", secret)
+    cfg.brain, cfg.model, cfg.base_url = "openai_compat", "m", "http://127.0.0.1:9/v1"  # offline, nothing listens
+    with caplog.at_level(logging.DEBUG):
+        build_runtime(cfg).agent.run("hello")  # provider unreachable in tests -> failure is logged
+    assert secret not in caplog.text
+    assert secret not in json.dumps(cfg.__dict__)
+
+
+def test_server_logs_are_json_without_unlisted_fields():
+    from agentforge.server import _JsonFormatter
+
+    rec = logging.LogRecord("x", logging.WARNING, __file__, 1, "msg", None, None)
+    rec.api_key = "leak"
+    rec.event = "auth_failure"
+    out = json.loads(_JsonFormatter().format(rec))
+    assert out["event"] == "auth_failure" and "api_key" not in out and "leak" not in json.dumps(out)
