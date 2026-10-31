@@ -19,7 +19,9 @@ log = logging.getLogger("agentforge.server")
 class _JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         data = {"level": record.levelname, "msg": record.getMessage()}
-        data.update({k: v for k, v in record.__dict__.items() if k in ("method", "path", "status", "brain", "error")})
+        data.update({k: v for k, v in record.__dict__.items() if k in ("event", "method", "path", "status", "client", "brain", "error")})
+        if record.exc_info:  # detailed errors stay server-side (stderr), never in responses
+            data["exc"] = self.formatException(record.exc_info)
         return json.dumps(data)
 
 
@@ -98,6 +100,8 @@ def make_server(runtime: Runtime, token: str) -> ThreadingHTTPServer:
             if self.path not in ("/agent", "/company"):
                 return self._send(404, {"error": "not found"})
             if not self._authorized():
+                log.warning("authentication failed", extra={"event": "auth_failure", "path": self.path,
+                                                            "client": self.client_address[0]})
                 return self._send(401, {"error": "unauthorized"})
             body = self._read_json()
             if body is None:
